@@ -1,0 +1,153 @@
+import Foundation
+import SwiftUI
+
+final class AppStore: ObservableObject {
+    @Published var state: AppState = AppState()
+
+    private let fileName = "elite_manifest_state.json"
+
+    init() {
+        load()
+        recalcCapital()
+    }
+
+    // MARK: - Persistence
+    private var fileURL: URL {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return dir.appendingPathComponent(fileName)
+    }
+
+    func save() {
+        do {
+            let data = try JSONEncoder.pretty.encode(state)
+            try data.write(to: fileURL, options: [.atomic])
+        } catch {
+            print("Save failed:", error)
+        }
+    }
+
+    func load() {
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let decoded = try JSONDecoder.iso.decode(AppState.self, from: data)
+            self.state = decoded
+        } catch {
+            // first run is fine
+        }
+    }
+
+    // MARK: - Daily reset
+    func maybeDailyReset() {
+        let today = Date().isoYYYYMMDD
+        if state.lastDailyResetISO != today {
+            state.premarket = state.premarket.map { var x = $0; x.done = false; return x }
+            state.market = state.market.map { var x = $0; x.done = false; return x }
+            state.post = state.post.map { var x = $0; x.done = false; return x }
+            state.spare = state.spare.map { var x = $0; x.done = false; return x }
+            state.lastDailyResetISO = today
+            save()
+        }
+    }
+
+    func manualDailyReset() {
+        state.lastDailyResetISO = nil
+        maybeDailyReset()
+        objectWillChange.send()
+    }
+
+    // MARK: - Capital calculations
+    func recalcCapital() {
+        var rows = state.capital.rows.sorted { $0.date < $1.date }
+        var cap = state.capital.startCapital
+        var peak = cap
+        var maxDD: Double = 0
+
+        for i in rows.indices {
+            rows[i].before = cap
+
+            let ret = rows[i].ret ?? state.capital.helper.defaultRet
+            guard let r = ret else {
+                rows[i].after = nil
+                continue
+            }
+
+            let after: Double
+            switch state.capital.mode {
+            case .pct:
+                after = cap * (1 + r/100.0)
+            case .pnl:
+                after = cap + r
+            }
+
+            cap = after
+            rows[i].after = after
+
+            peak = max(peak, cap)
+            let dd = peak > 0 ? (peak - cap) / peak : 0
+            maxDD = max(maxDD, dd)
+        }
+
+        state.capital.rows = rows.sorted { $0.date < $1.date }
+        save()
+    }
+
+    func capitalSummary() -> String {
+        let start = state.capital.startCapital
+        let last = state.capital.rows.sorted { $0.date < $1.date }.last?.after ?? start
+        let maxDD = computeMaxDrawdown()
+        return "Start \(start.aud) • Current \(last.aud) • Max DD \(String(format: "%.1f", maxDD*100))%"
+    }
+
+    private func computeMaxDrawdown() -> Double {
+        var cap = state.capital.startCapital
+        var peak = cap
+        var maxDD: Double = 0
+        for r in state.capital.rows.sorted(by: { $0.date < $1.date }) {
+            let ret = r.ret ?? state.capital.helper.defaultRet
+            guard let rr = ret else { continue }
+            cap = (state.capital.mode == .pct) ? cap * (1 + rr/100.0) : cap + rr
+            peak = max(peak, cap)
+            let dd = peak > 0 ? (peak - cap)/peak : 0
+            maxDD = max(maxDD, dd)
+        }
+        return maxDD
+    }
+}
+
+// MARK: - Helpers
+extension JSONEncoder {
+    static var pretty: JSONEncoder {
+        let e = JSONEncoder()
+        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        e.dateEncodingStrategy = .iso8601
+        return e
+    }
+}
+
+extension JSONDecoder {
+    static var iso: JSONDecoder {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }
+}
+
+extension Date {
+    var isoYYYYMMDD: String {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_AU")
+        f.timeZone = .current
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: self)
+    }
+}
+
+extension Double {
+    var aud: String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .currency
+        nf.currencyCode = "AUD"
+        return nf.string(from: NSNumber(value: self)) ?? "\(self)"
+    }
+}
