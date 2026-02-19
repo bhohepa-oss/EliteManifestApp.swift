@@ -1,0 +1,83 @@
+import SwiftUI
+
+struct DailyView: View {
+    @EnvironmentObject var store: AppStore
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 12) {
+                    checklistCard(title: "Pre-market", items: $store.state.premarket)
+                    checklistCard(title: "Market hours", items: $store.state.market)
+                    checklistCard(title: "Post-market", items: $store.state.post)
+                    checklistCard(title: "Spare hour blocks", items: $store.state.spare)
+
+                    metaCard
+                }
+                .padding()
+            }
+            .navigationTitle("Daily Checklist")
+            .onChange(of: store.state) { _ in store.save() }
+        }
+    }
+
+    private func checklistCard(title: String, items: Binding<[ChecklistItem]>) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.headline)
+            ForEach(items.wrappedValue.indices, id: \.self) { idx in
+                let item = items.wrappedValue[idx]
+                Toggle(isOn: Binding(
+                    get: { item.done },
+                    set: { v in
+                        var copy = items.wrappedValue
+                        copy[idx].done = v
+                        items.wrappedValue = copy
+                        store.save()
+                    }
+                )) {
+                    VStack(alignment: .leading) {
+                        Text(item.title).font(.subheadline).bold()
+                        Text(item.detail).font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
+        }
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var metaCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Daily Bias").font(.headline)
+
+            Picker("Bias", selection: $store.state.dailyMeta.bias) {
+                ForEach(Bias.allCases) { b in Text(b.label).tag(b) }
+            }
+            .pickerStyle(.segmented)
+
+            TextField("One-sentence thesis", text: $store.state.dailyMeta.thesis)
+                .textFieldStyle(.roundedBorder)
+
+            HStack {
+                TextField("Daily loss limit ($)", value: $store.state.dailyMeta.dailyLossLimit, format: .number)
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("Risk per trade (%)", value: $store.state.dailyMeta.riskPerTradePct, format: .number)
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            TextField("Today focus (e.g., VWAP rejections only)", text: $store.state.dailyMeta.focus)
+                .textFieldStyle(.roundedBorder)
+
+            Button("Save") { store.save() }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
