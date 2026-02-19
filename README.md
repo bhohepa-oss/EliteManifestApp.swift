@@ -1,1 +1,1 @@
-# EliteManifestApp.swift
+# EliteManifest
